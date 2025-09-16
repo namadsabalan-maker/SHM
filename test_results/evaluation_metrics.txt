@@ -1,0 +1,27 @@
+گزارش ارزیابی مدل‌ها روی داده‌های تست:
+----------------------------------------
+
+Isolation Forest:
+Confusion Matrix:
+[[33  7]
+ [ 4 36]]
+Precision: 0.84
+Recall: 0.90
+F1-Score: 0.87
+
+Mahalanobis Distance:
+Confusion Matrix:
+[[ 0 40]
+ [ 0 40]]
+Precision: 0.50
+Recall: 1.00
+F1-Score: 0.67
+
+Autoencoder:
+Confusion Matrix:
+[[40  0]
+ [20 20]]
+Precision: 1.00
+Recall: 0.50
+F1-Score: 0.67
+
