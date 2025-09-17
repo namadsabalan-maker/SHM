@@ -1,3 +1,4 @@
+```python
 # -*- coding: utf-8 -*-
 
 import streamlit as st
@@ -5,8 +6,13 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-import plotly.express as px  # NEW: For interactive time series
-import plotly.graph_objects as go
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+    st.error("Plotly is not installed. Please install it with `pip install plotly` for interactive time series plots.")
 import os
 import glob
 from scipy.signal import butter, lfilter
@@ -35,7 +41,7 @@ st.set_page_config(
 DATA_FOLDER = 'data'
 TEST_FOLDER = 'test_data'
 
-# Data processing functions (unchanged from previous, with docstrings)
+# Data processing functions
 def process_raw_data(folder_path):
     """
     Process raw accelerometer data from daily folders.
@@ -120,8 +126,7 @@ def apply_filter(df_magnitude, lowcut=0.1, highcut=10, fs=100):
     return df_filtered
 
 def extract_features(df_input):
-    """Extract statistical and spectral features from input data (fixed for single-date)."""
-    # FIXED: Handle single-date or multi-date; assume df_input has 'date' and 'filtered_magnitude'
+    """Extract statistical and spectral features from input data."""
     all_features = pd.DataFrame()
     for date, group in df_input.groupby('date'):
         signal = group['filtered_magnitude'].values
@@ -222,7 +227,7 @@ def run_analysis():
         logger.error(f"Analysis failed: {e}")
         return None, None, None, None, None, None, str(e)
 
-# NEW: Function for time series data prep and warning levels
+# Time series data preparation
 def prepare_time_series_data(test_results_df, models, scaler):
     """Prepare aggregated time series data with anomaly scores and warning levels."""
     ts_data = []
@@ -240,7 +245,7 @@ def prepare_time_series_data(test_results_df, models, scaler):
             # Aggregate: mean filtered magnitude
             mean_magnitude = df_raw_test['filtered_magnitude'].mean()
             
-            # Composite anomaly score (average of model predictions)
+            # Composite anomaly score
             anomaly_score = np.mean([row['Isolation_Forest'], row['Mahalanobis'], row['Autoencoder']])
             
             # Determine warning level
@@ -255,7 +260,7 @@ def prepare_time_series_data(test_results_df, models, scaler):
                 color = 'red'
             
             ts_data.append({
-                'Date': pd.to_datetime(date),  # Assume date is parseable; adjust if needed
+                'Date': pd.to_datetime(date, errors='coerce'),
                 'Mean Filtered Magnitude': mean_magnitude,
                 'Anomaly Score': anomaly_score,
                 'Warning Level': warning_level,
@@ -278,13 +283,13 @@ df_raw, df_magnitude, df_filtered, df_features, models, scaler, error = results
 st.title("Tabriz Cable-Stayed Bridge Structural Health Monitoring Dashboard")
 st.markdown("---")
 
-# Sidebar for tunable warning thresholds (NEW)
+# Sidebar for warning thresholds
 st.sidebar.title("Warning Thresholds")
 warning_low = st.sidebar.slider("Low Threshold (Normal/Warning)", 0.0, 1.0, 0.3)
 warning_high = st.sidebar.slider("High Threshold (Warning/Alert)", 0.0, 1.0, 0.7)
 st.sidebar.info("Adjust these to customize alert levels based on domain expertise.")
 
-# 1. Analysis summary (unchanged)
+# Analysis summary
 st.header("Analysis Summary")
 st.markdown("**Anomaly Detection Results on New Data:**")
 
@@ -314,7 +319,6 @@ def test_and_evaluate_models_in_dashboard(models, scaler, df_features):
             df_raw_test['magnitude'] = np.sqrt(df_raw_test['x']**2 + df_raw_test['y']**2 + df_raw_test['z']**2)
             df_raw_test['filtered_magnitude'] = butter_bandpass_filter(df_raw_test['magnitude'].values, 0.1, 10, 100)
             
-            # FIXED: Create proper df for extract_features
             test_df_input = df_raw_test[['filtered_magnitude']].copy()
             test_df_input['date'] = date
             test_features = extract_features(test_df_input).loc[date].to_dict()
@@ -383,21 +387,21 @@ if df_features is not None:
     test_results_df = test_and_evaluate_models_in_dashboard(models, scaler, df_features)
     st.dataframe(test_results_df)
 
-# 2. Charts and analyses section (updated tabs)
+# Charts and analyses section
 st.markdown("---")
 st.header("Charts and Project Analyses")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([  # NEW: Added Tab 7
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "Raw Data",
     "Filter and Acceleration Magnitude",
     "Feature Analysis",
     "Model Sensitivity Analysis",
     "Model Results",
     "Interpretive Report",
-    "Time Series History"  # NEW: Time history with warnings
+    "Time Series History"
 ])
 
-# Tabs 1-6 unchanged (omitted for brevity; copy from previous version)
+# Tab 1: Raw Data
 with tab1:
     st.subheader("Raw Data Plots")
     if df_raw is not None:
@@ -417,6 +421,7 @@ with tab1:
     else:
         st.info("No raw data plots found in the folder.")
 
+# Tab 2: Filter and Magnitude
 with tab2:
     st.subheader("Filtered and Acceleration Magnitude Plots")
     if df_magnitude is not None and df_filtered is not None:
@@ -449,6 +454,7 @@ with tab2:
     else:
         st.info("No magnitude or filtered plots found.")
 
+# Tab 3: Feature Analysis
 with tab3:
     st.subheader("Feature Analysis")
     if df_features is not None:
@@ -461,6 +467,7 @@ with tab3:
     else:
         st.info("No correlation matrix found.")
 
+# Tab 4: Sensitivity Analysis
 with tab4:
     st.subheader("Model Sensitivity Analysis")
     if df_features is not None and test_results_df is not None:
@@ -490,6 +497,7 @@ with tab4:
     else:
         st.info("Sensitivity analysis requires features and test results.")
 
+# Tab 5: Model Results
 with tab5:
     st.subheader("Anomaly Detection Results")
     if test_results_df is not None:
@@ -524,6 +532,7 @@ with tab5:
     else:
         st.info("No anomaly plots found.")
 
+# Tab 6: Interpretive Report
 with tab6:
     st.subheader("Final Interpretive Report")
     if test_results_df is not None:
@@ -546,14 +555,14 @@ with tab6:
     else:
         st.info("No interpretive report available; run tests first.")
 
-# NEW: Tab 7 - Time Series History with Warning Levels
+# Tab 7: Time Series History with Warning Levels
 with tab7:
     st.subheader("Time Series History: Test Data Over Time")
     if test_results_df is not None and not test_results_df.empty:
         ts_df = prepare_time_series_data(test_results_df, models, scaler)
         if not ts_df.empty:
-            # Use sidebar thresholds for dynamic warnings
-            ts_df['Anomaly Score'] = ts_df['Anomaly Score'].clip(upper=1.0)  # Normalize to 0-1
+            # Use sidebar thresholds
+            ts_df['Anomaly Score'] = ts_df['Anomaly Score'].clip(upper=1.0)
             ts_df['Warning Level'] = np.select(
                 [ts_df['Anomaly Score'] < warning_low, ts_df['Anomaly Score'] < warning_high],
                 ['Normal', 'Warning'], default='Alert'
@@ -563,40 +572,43 @@ with tab7:
                 ['green', 'yellow'], default='red'
             )
             
-            # Interactive Plotly time series
-            fig = go.Figure()
-            
-            # Plot mean magnitude
-            fig.add_trace(go.Scatter(
-                x=ts_df['Date'], y=ts_df['Mean Filtered Magnitude'],
-                mode='lines+markers', name='Mean Filtered Magnitude',
-                line=dict(color='blue'), marker=dict(size=8)
-            ))
-            
-            # Plot anomaly score with color-coded markers
-            fig.add_trace(go.Scatter(
-                x=ts_df['Date'], y=ts_df['Anomaly Score'],
-                mode='markers', name='Anomaly Score',
-                marker=dict(color=ts_df['Color'], size=12, symbol='circle',
-                            line=dict(width=2, color='darkgray')),
-                text=[f"Level: {level}<br>True: {true_label}" for level, true_label in zip(ts_df['Warning Level'], ts_df['True Label'])],
-                hovertemplate='<b>%{x}</b><br>Magnitude: %{y:.2f}<br>%{text}<extra></extra>'
-            ))
-            
-            # Add horizontal warning lines
-            fig.add_hline(y=warning_low, line_dash="dash", line_color="green", annotation_text="Normal Threshold")
-            fig.add_hline(y=warning_high, line_dash="dash", line_color="yellow", annotation_text="Warning Threshold")
-            fig.add_hline(y=1.0, line_dash="dash", line_color="red", annotation_text="Alert Max")
-            
-            fig.update_layout(
-                title="Temporal Evolution of Bridge Health Metrics",
-                xaxis_title="Date",
-                yaxis_title="Value (Normalized)",
-                yaxis=dict(range=[0, max(ts_df['Mean Filtered Magnitude'].max(), 1.0) * 1.1]),
-                hovermode='x unified',
-                showlegend=True
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            if PLOTLY_AVAILABLE:
+                # Interactive Plotly time series
+                fig = go.Figure()
+                
+                # Plot mean magnitude
+                fig.add_trace(go.Scatter(
+                    x=ts_df['Date'], y=ts_df['Mean Filtered Magnitude'],
+                    mode='lines+markers', name='Mean Filtered Magnitude',
+                    line=dict(color='blue'), marker=dict(size=8)
+                ))
+                
+                # Plot anomaly score
+                fig.add_trace(go.Scatter(
+                    x=ts_df['Date'], y=ts_df['Anomaly Score'],
+                    mode='markers', name='Anomaly Score',
+                    marker=dict(color=ts_df['Color'], size=12, symbol='circle',
+                                line=dict(width=2, color='darkgray')),
+                    text=[f"Level: {level}<br>True: {true_label}" for level, true_label in zip(ts_df['Warning Level'], ts_df['True Label'])],
+                    hovertemplate='<b>%{x}</b><br>Magnitude: %{y:.2f}<br>%{text}<extra></extra>'
+                ))
+                
+                # Add warning lines
+                fig.add_hline(y=warning_low, line_dash="dash", line_color="green", annotation_text="Normal Threshold")
+                fig.add_hline(y=warning_high, line_dash="dash", line_color="yellow", annotation_text="Warning Threshold")
+                fig.add_hline(y=1.0, line_dash="dash", line_color="red", annotation_text="Alert Max")
+                
+                fig.update_layout(
+                    title="Temporal Evolution of Bridge Health Metrics",
+                    xaxis_title="Date",
+                    yaxis_title="Value (Normalized)",
+                    yaxis=dict(range=[0, max(ts_df['Mean Filtered Magnitude'].max(), 1.0) * 1.1]),
+                    hovermode='x unified',
+                    showlegend=True
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("Interactive time series plot unavailable. Install Plotly with `pip install plotly`.")
             
             # Summary table
             st.markdown("**Time Series Summary:**")
@@ -617,7 +629,9 @@ st.sidebar.title("Usage Guide")
 st.sidebar.info(
     "1. This app runs the full analysis automatically.\n"
     "2. Ensure `data` and `test_data` folders are in the same GitHub repo.\n"
-    "3. To run locally: `streamlit run dashboard_app_final.py`"
+    "3. Install dependencies: `pip install -r requirements.txt`\n"
+    "4. Run locally: `streamlit run dashboard_app_final.py`"
 )
 st.sidebar.markdown("---")
 st.sidebar.success("The dashboard will open in your browser.")
+```
