@@ -1,4 +1,4 @@
-```python
+
 # -*- coding: utf-8 -*-
 
 import streamlit as st
@@ -634,4 +634,3 @@ st.sidebar.info(
 )
 st.sidebar.markdown("---")
 st.sidebar.success("The dashboard will open in your browser.")
-```
