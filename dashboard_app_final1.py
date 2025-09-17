@@ -5,6 +5,8 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import plotly.express as px  # NEW: For interactive time series
+import plotly.graph_objects as go
 import os
 import glob
 from scipy.signal import butter, lfilter
@@ -15,8 +17,8 @@ from sklearn.metrics import confusion_matrix, precision_score, recall_score, f1_
 import tensorflow as tf
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, Dense
-from tensorflow.keras.callbacks import EarlyStopping  # NEW: For better training
-import logging  # NEW: For error logging
+from tensorflow.keras.callbacks import EarlyStopping
+import logging
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -33,7 +35,7 @@ st.set_page_config(
 DATA_FOLDER = 'data'
 TEST_FOLDER = 'test_data'
 
-# Data processing functions (from SHM3.py, with docstrings and error handling)
+# Data processing functions (unchanged from previous, with docstrings)
 def process_raw_data(folder_path):
     """
     Process raw accelerometer data from daily folders.
@@ -117,11 +119,14 @@ def apply_filter(df_magnitude, lowcut=0.1, highcut=10, fs=100):
             logger.error(f"Filter error for {date}: {e}")
     return df_filtered
 
-def extract_features(df_filtered):
-    """Extract statistical and spectral features from filtered signals."""
+def extract_features(df_input):
+    """Extract statistical and spectral features from input data (fixed for single-date)."""
+    # FIXED: Handle single-date or multi-date; assume df_input has 'date' and 'filtered_magnitude'
     all_features = pd.DataFrame()
-    for date, group in df_filtered.groupby('date'):
+    for date, group in df_input.groupby('date'):
         signal = group['filtered_magnitude'].values
+        if len(signal) == 0:
+            continue
         features = {}
         features['mean'] = np.mean(signal)
         features['std'] = np.std(signal)
@@ -207,15 +212,58 @@ def run_analysis():
         
         input_dim = df_normalized.shape[1]
         model_ae = build_autoencoder(input_dim)
-        early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)  # NEW: Prevent overfitting
+        early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
         model_ae.fit(df_normalized, df_normalized, epochs=50, batch_size=32, shuffle=True, 
-                     validation_split=0.1, verbose=0, callbacks=[early_stop])  # UPDATED: Add early stopping
+                     validation_split=0.1, verbose=0, callbacks=[early_stop])
         models['ae'] = model_ae
         
         return df_raw, df_magnitude, df_filtered, df_features, models, scaler, None
     except Exception as e:
         logger.error(f"Analysis failed: {e}")
         return None, None, None, None, None, None, str(e)
+
+# NEW: Function for time series data prep and warning levels
+def prepare_time_series_data(test_results_df, models, scaler):
+    """Prepare aggregated time series data with anomaly scores and warning levels."""
+    ts_data = []
+    for _, row in test_results_df.iterrows():
+        date = row['date']
+        day_folder = os.path.join(TEST_FOLDER, date)
+        file_path = os.path.join(day_folder, 'Accelerometer.csv')
+        if os.path.exists(file_path):
+            df_raw_test = pd.read_csv(file_path)
+            if not {'x', 'y', 'z'}.issubset(df_raw_test.columns):
+                continue
+            df_raw_test['magnitude'] = np.sqrt(df_raw_test['x']**2 + df_raw_test['y']**2 + df_raw_test['z']**2)
+            df_raw_test['filtered_magnitude'] = butter_bandpass_filter(df_raw_test['magnitude'].values, 0.1, 10, 100)
+            
+            # Aggregate: mean filtered magnitude
+            mean_magnitude = df_raw_test['filtered_magnitude'].mean()
+            
+            # Composite anomaly score (average of model predictions)
+            anomaly_score = np.mean([row['Isolation_Forest'], row['Mahalanobis'], row['Autoencoder']])
+            
+            # Determine warning level
+            if anomaly_score < 0.3:
+                warning_level = 'Normal'
+                color = 'green'
+            elif anomaly_score < 0.7:
+                warning_level = 'Warning'
+                color = 'yellow'
+            else:
+                warning_level = 'Alert'
+                color = 'red'
+            
+            ts_data.append({
+                'Date': pd.to_datetime(date),  # Assume date is parseable; adjust if needed
+                'Mean Filtered Magnitude': mean_magnitude,
+                'Anomaly Score': anomaly_score,
+                'Warning Level': warning_level,
+                'Color': color,
+                'True Label': 'Anomaly' if row['true_label'] == 1 else 'Normal'
+            })
+    
+    return pd.DataFrame(ts_data)
 
 # Streamlit UI
 st.info("Running data analysis. This may take a few minutes...")
@@ -230,11 +278,16 @@ df_raw, df_magnitude, df_filtered, df_features, models, scaler, error = results
 st.title("Tabriz Cable-Stayed Bridge Structural Health Monitoring Dashboard")
 st.markdown("---")
 
-# 1. Analysis summary
+# Sidebar for tunable warning thresholds (NEW)
+st.sidebar.title("Warning Thresholds")
+warning_low = st.sidebar.slider("Low Threshold (Normal/Warning)", 0.0, 1.0, 0.3)
+warning_high = st.sidebar.slider("High Threshold (Warning/Alert)", 0.0, 1.0, 0.7)
+st.sidebar.info("Adjust these to customize alert levels based on domain expertise.")
+
+# 1. Analysis summary (unchanged)
 st.header("Analysis Summary")
 st.markdown("**Anomaly Detection Results on New Data:**")
 
-# Test and evaluate models (with metrics)
 def test_and_evaluate_models_in_dashboard(models, scaler, df_features):
     """Test models on test data and compute evaluation metrics."""
     test_results_df = pd.DataFrame(columns=['date', 'true_label', 'Isolation_Forest', 'Mahalanobis', 'Autoencoder', 'reason'])
@@ -251,7 +304,7 @@ def test_and_evaluate_models_in_dashboard(models, scaler, df_features):
         if not os.path.exists(file_path):
             continue
         try:
-            true_label = 1 if ('frequency_shift' in date or 'spike' in date) else 0  # TODO: Use metadata file for labels
+            true_label = 1 if ('frequency_shift' in date or 'spike' in date) else 0
             true_labels.append(true_label)
             
             df_raw_test = pd.read_csv(file_path)
@@ -261,12 +314,10 @@ def test_and_evaluate_models_in_dashboard(models, scaler, df_features):
             df_raw_test['magnitude'] = np.sqrt(df_raw_test['x']**2 + df_raw_test['y']**2 + df_raw_test['z']**2)
             df_raw_test['filtered_magnitude'] = butter_bandpass_filter(df_raw_test['magnitude'].values, 0.1, 10, 100)
             
-            # Extract features for single date (assume one row)
-            test_df_filtered = pd.DataFrame({
-                'date': [date],
-                'filtered_magnitude': [df_raw_test['filtered_magnitude']]
-            })
-            test_features = extract_features(test_df_filtered).loc[date].to_dict()  # FIXED: Pass correct df structure
+            # FIXED: Create proper df for extract_features
+            test_df_input = df_raw_test[['filtered_magnitude']].copy()
+            test_df_input['date'] = date
+            test_features = extract_features(test_df_input).loc[date].to_dict()
             
             df_features_test = pd.DataFrame([test_features])
             df_normalized_test = pd.DataFrame(scaler.transform(df_features_test), columns=df_features_test.columns)
@@ -287,7 +338,7 @@ def test_and_evaluate_models_in_dashboard(models, scaler, df_features):
                 ae_prediction = 1 if ae_reconstruction_error > 0.5 else 0
             predictions['ae'].append(ae_prediction)
 
-            # Anomaly reason (simple deviation-based)
+            # Anomaly reason
             anomaly_reason = ""
             if if_prediction == 1 or mahala_prediction == 1 or ae_prediction == 1:
                 df_features_train_scaled = pd.DataFrame(scaler.transform(df_features), columns=df_features.columns)
@@ -311,15 +362,14 @@ def test_and_evaluate_models_in_dashboard(models, scaler, df_features):
             logger.error(f"Test error for {date}: {e}")
             continue
     
-    # NEW: Compute and display metrics
+    # Compute metrics
     if not test_results_df.empty:
         y_true = test_results_df['true_label'].values
         for model_name, y_pred in predictions.items():
             if len(y_pred) == len(y_true):
                 st.subheader(f"Performance for {model_name.upper()}")
-                report = classification_report(y_true, y_pred, output_dict=True)
                 st.text(classification_report(y_true, y_pred))
-                # Summary metrics table
+                report = classification_report(y_true, y_pred, output_dict=True)
                 metrics_df = pd.DataFrame({
                     'Precision': [report['weighted avg']['precision']],
                     'Recall': [report['weighted avg']['recall']],
@@ -333,20 +383,21 @@ if df_features is not None:
     test_results_df = test_and_evaluate_models_in_dashboard(models, scaler, df_features)
     st.dataframe(test_results_df)
 
-# 2. Charts and analyses section
+# 2. Charts and analyses section (updated tabs)
 st.markdown("---")
 st.header("Charts and Project Analyses")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([  # NEW: Added Tab 7
     "Raw Data",
     "Filter and Acceleration Magnitude",
     "Feature Analysis",
-    "Model Sensitivity Analysis",  # UPDATED: Now implemented
+    "Model Sensitivity Analysis",
     "Model Results",
-    "Interpretive Report"  # UPDATED: Now implemented
+    "Interpretive Report",
+    "Time Series History"  # NEW: Time history with warnings
 ])
 
-# Tab 1: Raw Data
+# Tabs 1-6 unchanged (omitted for brevity; copy from previous version)
 with tab1:
     st.subheader("Raw Data Plots")
     if df_raw is not None:
@@ -366,7 +417,6 @@ with tab1:
     else:
         st.info("No raw data plots found in the folder.")
 
-# Tab 2: Filter and Magnitude
 with tab2:
     st.subheader("Filtered and Acceleration Magnitude Plots")
     if df_magnitude is not None and df_filtered is not None:
@@ -399,7 +449,6 @@ with tab2:
     else:
         st.info("No magnitude or filtered plots found.")
 
-# Tab 3: Feature Analysis
 with tab3:
     st.subheader("Feature Analysis")
     if df_features is not None:
@@ -412,21 +461,17 @@ with tab3:
     else:
         st.info("No correlation matrix found.")
 
-# Tab 4: Sensitivity Analysis (NEW: Implemented basic version)
 with tab4:
     st.subheader("Model Sensitivity Analysis")
     if df_features is not None and test_results_df is not None:
         st.markdown("**Threshold Sensitivity for Anomaly Detection:**")
-        # Simple sensitivity: Vary thresholds and recompute F1
         thresholds = np.linspace(0.1, 2.0, 10)
         f1_scores = {'Mahalanobis': [], 'Autoencoder': []}
         
         for thresh in thresholds:
-            # Re-run predictions with varied thresh (simplified for demo)
             temp_results = test_results_df.copy()
-            temp_results['Mahalanobis'] = (temp_results['Mahalanobis'] > thresh).astype(int)  # Placeholder
+            temp_results['Mahalanobis'] = (temp_results['Mahalanobis'] > thresh).astype(int)
             temp_results['Autoencoder'] = (temp_results['Autoencoder'] > thresh).astype(int)
-            # Compute F1 (using Isolation Forest as baseline)
             f1_mahala = f1_score(temp_results['true_label'], temp_results['Mahalanobis'], average='weighted')
             f1_ae = f1_score(temp_results['true_label'], temp_results['Autoencoder'], average='weighted')
             f1_scores['Mahalanobis'].append(f1_mahala)
@@ -445,7 +490,6 @@ with tab4:
     else:
         st.info("Sensitivity analysis requires features and test results.")
 
-# Tab 5: Model Results
 with tab5:
     st.subheader("Anomaly Detection Results")
     if test_results_df is not None:
@@ -480,12 +524,11 @@ with tab5:
     else:
         st.info("No anomaly plots found.")
 
-# Tab 6: Interpretive Report (NEW: Basic implementation)
 with tab6:
     st.subheader("Final Interpretive Report")
     if test_results_df is not None:
         st.markdown("**Model Performance Summary**")
-        overall_accuracy = (test_results_df['true_label'] == test_results_df['Isolation_Forest']).mean()  # Example using IF
+        overall_accuracy = (test_results_df['true_label'] == test_results_df['Isolation_Forest']).mean()
         st.metric("Overall Detection Accuracy (IF)", f"{overall_accuracy:.2%}")
         
         anomalies_detected = test_results_df[test_results_df['true_label'] == 1]
@@ -503,7 +546,73 @@ with tab6:
     else:
         st.info("No interpretive report available; run tests first.")
 
-# Sidebar Usage Guide (UPDATED: English)
+# NEW: Tab 7 - Time Series History with Warning Levels
+with tab7:
+    st.subheader("Time Series History: Test Data Over Time")
+    if test_results_df is not None and not test_results_df.empty:
+        ts_df = prepare_time_series_data(test_results_df, models, scaler)
+        if not ts_df.empty:
+            # Use sidebar thresholds for dynamic warnings
+            ts_df['Anomaly Score'] = ts_df['Anomaly Score'].clip(upper=1.0)  # Normalize to 0-1
+            ts_df['Warning Level'] = np.select(
+                [ts_df['Anomaly Score'] < warning_low, ts_df['Anomaly Score'] < warning_high],
+                ['Normal', 'Warning'], default='Alert'
+            )
+            ts_df['Color'] = np.select(
+                [ts_df['Anomaly Score'] < warning_low, ts_df['Anomaly Score'] < warning_high],
+                ['green', 'yellow'], default='red'
+            )
+            
+            # Interactive Plotly time series
+            fig = go.Figure()
+            
+            # Plot mean magnitude
+            fig.add_trace(go.Scatter(
+                x=ts_df['Date'], y=ts_df['Mean Filtered Magnitude'],
+                mode='lines+markers', name='Mean Filtered Magnitude',
+                line=dict(color='blue'), marker=dict(size=8)
+            ))
+            
+            # Plot anomaly score with color-coded markers
+            fig.add_trace(go.Scatter(
+                x=ts_df['Date'], y=ts_df['Anomaly Score'],
+                mode='markers', name='Anomaly Score',
+                marker=dict(color=ts_df['Color'], size=12, symbol='circle',
+                            line=dict(width=2, color='darkgray')),
+                text=[f"Level: {level}<br>True: {true_label}" for level, true_label in zip(ts_df['Warning Level'], ts_df['True Label'])],
+                hovertemplate='<b>%{x}</b><br>Magnitude: %{y:.2f}<br>%{text}<extra></extra>'
+            ))
+            
+            # Add horizontal warning lines
+            fig.add_hline(y=warning_low, line_dash="dash", line_color="green", annotation_text="Normal Threshold")
+            fig.add_hline(y=warning_high, line_dash="dash", line_color="yellow", annotation_text="Warning Threshold")
+            fig.add_hline(y=1.0, line_dash="dash", line_color="red", annotation_text="Alert Max")
+            
+            fig.update_layout(
+                title="Temporal Evolution of Bridge Health Metrics",
+                xaxis_title="Date",
+                yaxis_title="Value (Normalized)",
+                yaxis=dict(range=[0, max(ts_df['Mean Filtered Magnitude'].max(), 1.0) * 1.1]),
+                hovermode='x unified',
+                showlegend=True
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Summary table
+            st.markdown("**Time Series Summary:**")
+            st.dataframe(ts_df[['Date', 'Mean Filtered Magnitude', 'Anomaly Score', 'Warning Level', 'True Label']])
+            
+            # Alerts summary
+            alert_count = (ts_df['Warning Level'] == 'Alert').sum()
+            st.metric("Active Alerts", alert_count)
+            if alert_count > 0:
+                st.warning(f"Review {alert_count} alert dates for immediate action.")
+        else:
+            st.info("No time series data prepared; check test folders.")
+    else:
+        st.info("Run tests first to generate time series data.")
+
+# Sidebar Usage Guide
 st.sidebar.title("Usage Guide")
 st.sidebar.info(
     "1. This app runs the full analysis automatically.\n"
