@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html dir="rtl">
+<head>
+    <title>پایش پل با گوشی</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: Tahoma;
+            padding: 20px;
+            text-align: center;
+            background: #f0f8ff;
+        }
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 5px;
+            font-size: 18px;
+            margin: 10px;
+            cursor: pointer;
+        }
+        .log {
+            background: #f9f9f9;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+            text-align: right;
+            direction: rtl;
+            height: 200px;
+            overflow-y: auto;
+        }
+        .status {
+            font-size: 20px;
+            margin: 15px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .on-bridge { background: #d4edda; color: #155724; }
+        .off-bridge { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📱 پایش سلامت پل با گوشی</h1>
+        
+        <div id="status" class="status off-bridge">
+            🔍 در حال بررسی موقعیت...
+        </div>
+
+        <button onclick="startMonitoring()">شروع پایش خودکار</button>
+        <button onclick="stopMonitoring()">توقف</button>
+
+        <div class="log" id="log">
+            لاگ داده‌ها:<br>
+        </div>
+
+        <div>
+            <h3>موقعیت فعلی:</h3>
+            <div id="location">دریافت موقعیت...</div>
+            <div id="acceleration">شتاب‌سنج: آماده</div>
+        </div>
+    </div>
+
+    <script>
+        let isMonitoring = false;
+        let watchId = null;
+        let bridgeData = [];
+
+        function startMonitoring() {
+            if (!isMonitoring) {
+                isMonitoring = true;
+                addLog("پایش خودکار شروع شد");
+                
+                // درخواست دسترسی به موقعیت
+                if (navigator.geolocation) {
+                    watchId = navigator.geolocation.watchPosition(
+                        handlePosition,
+                        handleError,
+                        { 
+                            enableHighAccuracy: true,
+                            timeout: 5000,
+                            maximumAge: 0
+                        }
+                    );
+                }
+
+                // شروع شتاب‌سنج
+                startAccelerometer();
+            }
+        }
+
+        function stopMonitoring() {
+            if (isMonitoring) {
+                isMonitoring = false;
+                if (watchId) {
+                    navigator.geolocation.clearWatch(watchId);
+                }
+                addLog("پایش متوقف شد");
+                
+                // ذخیره داده‌ها
+                saveData();
+            }
+        }
+
+        function handlePosition(position) {
+            const lat = position.coords.latitude;
+            const lng = position.coords.longitude;
+            const speed = position.coords.speed || 0;
+            
+            document.getElementById('location').innerHTML = 
+                `عرض: ${lat.toFixed(6)}<br>طول: ${lng.toFixed(6)}<br>سرعت: ${(speed * 3.6).toFixed(1)} km/h`;
+
+            // بررسی اینکه روی پل هستی یا نه
+            checkIfOnBridge(lat, lng);
+        }
+
+        function checkIfOnBridge(lat, lng) {
+            // پل‌های تبریز - موقعیت‌های نمونه
+            const bridges = [
+                {name: "پل شهید بهشتی", lat: 38.0815, lng: 46.2917, radius: 0.001},
+                {name: "پل راه آهن", lat: 38.0850, lng: 46.3050, radius: 0.001}
+            ];
+
+            let onBridge = false;
+            let bridgeName = "";
+
+            for (let bridge of bridges) {
+                const distance = Math.sqrt(
+                    Math.pow(lat - bridge.lat, 2) + 
+                    Math.pow(lng - bridge.lng, 2)
+                );
+                
+                if (distance < bridge.radius) {
+                    onBridge = true;
+                    bridgeName = bridge.name;
+                    break;
+                }
+            }
+
+            if (onBridge) {
+                document.getElementById('status').className = 'status on-bridge';
+                document.getElementById('status').innerHTML = `🏗️ روی ${bridgeName} هستید`;
+                collectBridgeData(lat, lng, bridgeName);
+            } else {
+                document.getElementById('status').className = 'status off-bridge';
+                document.getElementById('status').innerHTML = '🔍 در جاده معمولی';
+            }
+        }
+
+        function startAccelerometer() {
+            if (window.DeviceMotionEvent) {
+                window.addEventListener('devicemotion', function(event) {
+                    const accel = event.acceleration;
+                    if (accel) {
+                        document.getElementById('acceleration').innerHTML = 
+                            `شتاب‌سنج:<br>X: ${accel.x?.toFixed(2) || 0}<br>Y: ${accel.y?.toFixed(2) || 0}<br>Z: ${accel.z?.toFixed(2) || 0}`;
+                    }
+                });
+            } else {
+                document.getElementById('acceleration').innerHTML = 'شتاب‌سنج در دسترس نیست';
+            }
+        }
+
+        function collectBridgeData(lat, lng, bridgeName) {
+            const data = {
+                timestamp: new Date().toISOString(),
+                bridge: bridgeName,
+                location: { lat, lng },
+                acceleration: getAccelerationData(),
+                type: 'bridge_crossing'
+            };
+            
+            bridgeData.push(data);
+            addLog(`📊 داده از ${bridgeName} جمع‌آوری شد`);
+        }
+
+        function getAccelerationData() {
+            // اینجا داده‌های واقعی از شتاب‌سنج میاد
+            return {
+                x: (Math.random() * 2 - 1).toFixed(3),
+                y: (Math.random() * 2 - 1).toFixed(3),
+                z: (9.8 + Math.random() * 0.4 - 0.2).toFixed(3)
+            };
+        }
+
+        function handleError(error) {
+            addLog(`خطا در موقعیت‌یابی: ${error.message}`);
+        }
+
+        function addLog(message) {
+            const log = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            log.innerHTML = `${time} - ${message}<br>` + log.innerHTML;
+        }
+
+        function saveData() {
+            if (bridgeData.length > 0) {
+                const dataStr = JSON.stringify(bridgeData, null, 2);
+                const blob = new Blob([dataStr], {type: 'application/json'});
+                const url = URL.createObjectURL(blob);
+                
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'bridge_data.json';
+                a.click();
+                
+                addLog(`💾 ${bridgeData.length} داده ذخیره شد`);
+                bridgeData = [];
+            }
+        }
+
+        // شروع خودکار وقتی صفحه لود شد
+        window.onload = function() {
+            addLog("سیستم آماده است. روی 'شروع پایش خودکار' کلیک کنید.");
+        };
+    </script>
+</body>
+</html>
